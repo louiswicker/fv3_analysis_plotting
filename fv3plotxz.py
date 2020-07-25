@@ -21,9 +21,9 @@ from mpl_toolkits.axes_grid1 import make_axes_locatable
 _ref_cmap = ctables.registry.get_colortable('NWSReflectivity')
 _ref_norm = Normalize(5,75)
 
-_wz_clevels  = np.arange(-150.,175.,25.)
-_w_clevels   = np.arange(-15.,16.,1.)
-_dbz_clevels = [20., 45]
+_wz_clevels   = np.arange(-150.,175.,25.)
+_w_clevels    = np.arange(-15.,16.,1.)
+_dbz_clevels  = [20., 45]
 _vector_scale = 3.0
 
 interactive   = True
@@ -36,9 +36,9 @@ _min_dbz = 10.
 _min_w   = 0.01
 _vec_w   = 0.005
 
-iwidth = 20
-jwidth = 20
-dx     = 3.000
+_iwidth = 30
+_jwidth = 30
+_dx    = 1.000
 
 figsize = (24,5)
 
@@ -54,7 +54,7 @@ def plot_W_DBZ_T_WZ(w, dbz, t, pp, xx, yy, height, time, member, \
                     glat=None, glon=None, sfc=False, \
                     out_prefix=None, noshow=False, zoom=False):
 
-    filename = "%s_%3.3imin_%3.3ikm" % (out_prefix, time, np.floor(height))
+    filename = "%s_%2.2dmin_%3.3ikm" % (out_prefix, int(time), np.floor(height))
                
     fig, (ax1, ax2, ax3, ax4) = plt.subplots(1, 4, sharey=True, figsize = figsize)
 
@@ -135,7 +135,7 @@ def plot_W_DBZ_T_WZ(w, dbz, t, pp, xx, yy, height, time, member, \
     fig.colorbar(plot, cax=cax, orientation=_cbar_orien, label='pertT (K)')
 
     plot    = ax4.contour(xx, yy, t, clevels[::2], colors='k', linewidths=0.5)
-    title = ("Pert. Temperature")
+    title = ("Pert. Pot. Temperature")
     ax4.set_title(title, fontsize=10)
 
     if zoom:
@@ -173,6 +173,9 @@ parser.add_option("-t", "--time", dest="time", type="float", default=_time, \
                                   help="Time plot, default is T = %4.0f min" % _time)
 parser.add_option("-s", "--slide", dest="slide", type="int", default=0, \
                                   help="Move the XZ plot north or south by slide points")
+parser.add_option(      "--dx",   dest="dx", type="float", default=_dx, \
+                                  help="Grid spacing for run in km")
+parser.add_option(      "--center",  dest="center", action="store_true", help="set max/min loc to nx/2, ny/2")
 
 (options, args) = parser.parse_args()
 
@@ -186,13 +189,33 @@ else:
         print("\nError!  netCDF file does not seem to exist?")
         print("Filename:  %s" % (options.file))
         sys.exit(1)
-        
+
+if options.dx:
+    dx = options.dx
+else:
+    dx = _dx
+
+iwidth = int(_iwidth / dx)
+jwidth = int(_jwidth / dx)
+
 time = options.time
-step = options.time // 5
+step = int(options.time / 5) - 1 
     
 plot_prefix = 'fv3_xz'
-    
-f  = netCDF4.Dataset(options.file, "r+")
+
+f  = netCDF4.Dataset(options.file, "r")
+
+# get the model times
+units     = f['time'].units
+tarray    = f['time'][:]
+init_time = units.split('since')[1][1:]                                      # strip out COARDS info
+init      = DT.datetime.strptime(init_time, '%Y-%m-%d %H:%M:%S')                 # create a datetime object
+init2     = DT.datetime.strptime("2019-05-20 22:00:00", '%Y-%m-%d %H:%M:%S')
+DateTimeArray  = [init + datetime.timedelta(minutes=int(s)) for s in tarray ]  # this is a list!
+
+#time = DT.datetime.strftime(DateTimeArray[step]-init2, '%M')               # create a datetime object
+time = int((DateTimeArray[step]-init2).seconds/60)               # create a datetime object
+print(time)
 
 nt, nz, ny, nx = f.variables['pres'][...].shape
 
@@ -209,21 +232,23 @@ print("pertP: ",pp.max(), pp.min())
 print("PI: ",pi.max(), pi.min())
 
 t  = f.variables['tmp'][step,::-1,:,:]
-print("Temp?:  ", t.max(), t.min())
 t0 = f.variables['tmp'][0,::-1,:,:]
-tp = t - t0
+for k in np.arange(nz):
+    t0[k,:,:] = t0[k,0,0]
 
-print(tp.max(), tp.min())
+tp = t - t0
 
 tp = t0 * (tp/t0 - 0.285*pp/p0) / pi0
 
 print("Theta max/min:  ", tp.max(), tp.min())
 
-
 w  = f.variables['dzdt'][step,::-1,:,:]
-print(w.max(), w.min())
 
-wloc = np.unravel_index(np.argmax(w.max(axis=0), axis=None), w.shape[1:])
+if( options.center ):
+     wloc[0] = ny/2
+     wloc[1] = nx/2 + int(7/dx)
+else:
+     wloc = np.unravel_index(np.argmax(w.max(axis=0), axis=None), w.shape[1:])
 
 wloc = np.array(wloc)
 
@@ -240,8 +265,8 @@ print(v.max(), v.min())
 
 dbz = f.variables['refl_10cm'][step,::-1,:,:]
 
-x  = (wloc[1] + 0.5)*dx + dx*np.arange(2*iwidth)
-y  = (wloc[0] + 0.5)*dx + dx*np.arange(2*jwidth)
+x  = (wloc[1] - iwidth)*dx + dx*np.arange(2*iwidth)
+y  = (wloc[0] - jwidth)*dx + dx*np.arange(2*jwidth)
 zz = z[:,wloc[0],wloc[1]-iwidth:wloc[1]+iwidth] / 1000.
 
 xx = np.tile(x, nz).reshape(nz,x.size)

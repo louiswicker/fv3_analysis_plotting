@@ -36,9 +36,9 @@ _min_dbz = 10.
 _min_w   = 0.01
 _vec_w   = 0.005
 
-iwidth = 20
-jwidth = 20
-dx     = 3.000
+_iwidth = 30
+_jwidth = 30
+_dx     = 1.000
 
 figsize = (24,5)
 
@@ -52,9 +52,9 @@ _time   = 90
 #===============================================================================
 def plot_W_DBZ_T_WZ(w, dbz, t, pp, xx, yy, height, time, member, \
                     glat=None, glon=None, sfc=False, \
-                    out_prefix=None, noshow=False, zoom=None):
+                    out_prefix=None, vector = False, noshow=False, zoom=None):
 
-    filename = "%s_%3.3imin_%4.2f" % (out_prefix, time, height)
+    filename = "%s_%2.2dmin_%2.2dkm" % (out_prefix, int(time), int(height/1000.))
                
     fig, (ax1, ax2, ax3, ax4) = plt.subplots(1, 4, sharey=True, figsize = figsize)
 
@@ -129,24 +129,25 @@ def plot_W_DBZ_T_WZ(w, dbz, t, pp, xx, yy, height, time, member, \
 
 #---
 
-    if( height <= 1001. ):  # Plot surface pertT
+    if( not vector ):  # Plot surface pertT
         clevels = N.arange(-12.,13.,1.)
         plot    = ax4.contourf(xx, yy, t, clevels, cmap='bwr')
 
         divider = make_axes_locatable(ax4)
-        cax = divider.append_axes('right', size='5%', pad=0.05)
+        cax     = divider.append_axes('right', size='5%', pad=0.05)
         fig.colorbar(plot, cax=cax, orientation=_cbar_orien, label='pertT (K)')
 
         plot    = ax4.contour(xx, yy, t, clevels[::2], colors='k', linewidths=0.5)
-        title = ("SFC Pert. Temperature")
+        title   = ("Pert. Pot. Temperature")
         ax4.set_title(title, fontsize=10)
 
         if zoom:
             ax4.set_xlim(1000*zoom[0],1000*zoom[1])
             ax4.set_ylim(1000*zoom[2],1000*zoom[3])
  
-        at = AnchoredText("Max pertT: %4.1f \n Min pertT: %4.1f" % (t.max(),t.min()), 
-                           loc=4, prop=dict(size=6), frameon=True,)
+        at       = AnchoredText("Max pertT: %4.1f \n Min pertT: %4.1f" % (t.max(),t.min()), 
+                                loc=4, prop=dict(size=6), frameon=True,)
+
         at.patch.set_boxstyle("round,pad=0.,rounding_size=0.2")
         ax4.add_artist(at)
 
@@ -155,7 +156,6 @@ def plot_W_DBZ_T_WZ(w, dbz, t, pp, xx, yy, height, time, member, \
         scale_w_clevels = min(max(N.int(height/1000.), 1.0), 6.0)
         clevels = scale_w_clevels*N.arange(-10.,11.,1.)
         wmask   = np.ma.masked_array(w, mask = [N.abs(w) <= scale_w_clevels*_min_w])
-     #  ax4.contourf(xx, yy, wmask, clevels, cmap='bwr')
         ax4.contour(xx, yy, w, clevels[::2], colors='k', linewidths=1.0)
 
         spd = np.sqrt(t[0,:,:]**2 + t[1,:,:]**2)
@@ -165,6 +165,10 @@ def plot_W_DBZ_T_WZ(w, dbz, t, pp, xx, yy, height, time, member, \
                    cmap=plt.get_cmap('YlOrRd'), norm=plt.Normalize(vmin=5.0, vmax=60.), \
                    angles='xy', scale_units='xy', scale=_vector_scale)
 
+        if zoom:
+            ax4.set_xlim(1000*zoom[0],1000*zoom[1])
+            ax4.set_ylim(1000*zoom[2],1000*zoom[3])
+ 
         divider = make_axes_locatable(ax4)
         cax = divider.append_axes('right', size='5%', pad=0.05)
         fig.colorbar(plot, cax=cax, orientation=_cbar_orien, label=('W %s' % ("$m s^{-1}$")))
@@ -195,6 +199,12 @@ parser.add_option("-t", "--time", dest="time", type="float", default=_time, \
                                   help="Time plot, default is T = %4.0f min" % _time)
 parser.add_option("-z", "--height", dest="height", type="float", default=_height, \
                                   help="Height in the file, default is z = %4.0f m" % _height)
+parser.add_option("-s", "--sfc",  dest="sfc", action="store_true", help="plot surface temperature")
+
+parser.add_option(      "--vec",  dest="vector", action="store_true", help="plot u/v vectors with updraft")
+
+parser.add_option(      "--dx",   dest="dx", type="float", default=_dx, \
+                                  help="Grid spacing for run in km")
 
 (options, args) = parser.parse_args()
 
@@ -208,58 +218,82 @@ else:
         print("\nError!  netCDF file does not seem to exist?")
         print("Filename:  %s" % (options.file))
         sys.exit(1)
+
+if options.dx:
+    dx = options.dx
+else:
+    dx = _dx
         
+iwidth = int(_iwidth / dx)
+jwidth = int(_jwidth / dx)
+
 time = options.time
-step = options.time // 5
+step = int(options.time / 5) - 1
 height = options.height
     
-plot_prefix = 'fv3'
+plot_prefix = 'fv3_xy'
     
 f  = netCDF4.Dataset(options.file, "r+")
+
+# get the model times
+units     = f['time'].units
+tarray    = f['time'][:]
+init_time = units.split('since')[1][1:]                                      # strip out COARDS info
+init      = DT.datetime.strptime(init_time, '%Y-%m-%d %H:%M:%S')                 # create a datetime object
+init2     = DT.datetime.strptime("2019-05-20 22:00:00", '%Y-%m-%d %H:%M:%S')
+DateTimeArray  = [init + datetime.timedelta(minutes=int(s)) for s in tarray ]  # this is a list!
+
+#time = DT.datetime.strftime(DateTimeArray[step]-init2, '%M')               # create a datetime object
+time = int((DateTimeArray[step]-init2).seconds/60)
 
 nt, nz, ny, nx = f.variables['pres'][...].shape
 
 z = np.cumsum(f.variables['delz'][step,::-1,:,:],axis=0)
 
-pbar = f.variables['pres'][0,::-1,:,:] / 100.
+p0   = f.variables['pres'][0,::-1,:,:] / 100.
+pi0  = (p0/1000.)**0.285
 p    = f.variables['pres'][step,::-1,:,:] / 100.
-pi   = (1000./p)**0.285
-pp   = p - pbar
+pi   = (p/1000.)**0.285
+pp   = p - p0
 
-t  = f.variables['tmp'][step,:,:,:]
-print("Temp?:  ", t.max(), t.min())
-t  = f.variables['tmp'][step,-1,:,:]
-t0 = f.variables['tmp'][0,-1,:,:]
+print("P: ",p.max(), p.min())
+print("pertP: ",pp.max(), pp.min())
+print("PI: ",pi.max(), pi.min())
+
+t  = f.variables['tmp'][step,::-1,:,:]
+t0 = f.variables['tmp'][0,::-1,:,:]
+for k in np.arange(nz):
+    t0[k,:,:] = t0[k,0,0]
+
 tp = t - t0
 
-print(tp.max(), tp.min())
+tp = t0 * (tp/t0 - 0.285*pp/p0) / pi0
 
-w  = f.variables['dzdt'][step,::-1,:,:]
-print(w.max(), w.min())
+print("Temperature max/min:  ", t.max(), t.min())
+print("Pert Theta max/min:  ", tp.max(), tp.min())
+
+w    = f.variables['dzdt'][step,::-1,:,:]
 
 wloc = np.unravel_index(np.argmax(w.max(axis=0), axis=None), w.shape[1:])
-print(wloc)
+wloc = np.array(wloc)
+wloc[1] = wloc[1] + int(4/dx)
 
 u = f.variables['ugrd'][step,::-1,:,:]
-print(u.max(), u.min())
 v = f.variables['vgrd'][step,::-1,:,:]
-print(v.max(), v.min())
 
 dbz = f.variables['refl_10cm'][step,::-1,:,:]
 
-x = (wloc[1] + 0.5)*dx + dx*np.arange(2*iwidth)
-y = (wloc[0] + 0.5)*dx + dx*np.arange(2*jwidth)
+x = (wloc[1] - iwidth)*dx + dx*np.arange(2*iwidth)
+y = (wloc[0] - jwidth)*dx + dx*np.arange(2*jwidth)
 xx, yy = np.meshgrid(x, y)
 
 wplot = np.zeros((ny,nx))
 dplot = np.zeros((ny,nx))
 
-if( height > 1001. ):
+if( options.vector ):
     tplot = np.zeros((2,ny,nx))
 else:
-    tplot = tp
-
-print(tplot.shape)
+    tplot = np.zeros((ny,nx))
 
 pplot = np.zeros((ny,nx))
 
@@ -270,20 +304,23 @@ for i in np.arange(nx):
         dplot[j,i] = np.interp(height,z[:,j,i], dbz[:,j,i])
         pplot[j,i] = np.interp(height,z[:,j,i], pp [:,j,i])
  
-        if( height > 1001. ):
+        if( options.vector ):
             tplot[0,j,i] = np.interp(height,z[:,j,i], u [:,j,i])
             tplot[1,j,i] = np.interp(height,z[:,j,i], v [:,j,i])
+        else:
+            tplot[j,i] = np.interp(height,z[:,j,i], tp [:,j,i])
 
-wplot  = wplot[wloc[0]-jwidth:wloc[0]+jwidth,wloc[1]-iwidth:wloc[1]+iwidth]
-dplot  = dplot[wloc[0]-jwidth:wloc[0]+jwidth,wloc[1]-iwidth:wloc[1]+iwidth]
-pplot  = pplot[wloc[0]-jwidth:wloc[0]+jwidth,wloc[1]-iwidth:wloc[1]+iwidth]
-if( height <= 1001. ):
-    tplot  = tplot[wloc[0]-jwidth:wloc[0]+jwidth,wloc[1]-iwidth:wloc[1]+iwidth]
-else:
+wplot = wplot[wloc[0]-jwidth:wloc[0]+jwidth,wloc[1]-iwidth:wloc[1]+iwidth]
+dplot = dplot[wloc[0]-jwidth:wloc[0]+jwidth,wloc[1]-iwidth:wloc[1]+iwidth]
+pplot = pplot[wloc[0]-jwidth:wloc[0]+jwidth,wloc[1]-iwidth:wloc[1]+iwidth]
+
+if( options.vector ):
     tplot  = tplot[:,wloc[0]-jwidth:wloc[0]+jwidth,wloc[1]-iwidth:wloc[1]+iwidth]
+else:
+    tplot  = tplot[wloc[0]-jwidth:wloc[0]+jwidth,wloc[1]-iwidth:wloc[1]+iwidth]
 
 plot_W_DBZ_T_WZ(wplot, dplot, tplot, pplot, xx, yy, height, time, \
                 member=2, glat=0.0, glon=-100., sfc=False, out_prefix=plot_prefix, \
-                noshow=None, zoom=None)
+                noshow=None, vector=options.vector, zoom=None)
 
 # End of file
